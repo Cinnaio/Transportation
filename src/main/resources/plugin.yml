@@ -1,0 +1,14 @@
+name: Transportation
+version: '1.0.0'
+main: com.github.cinnaio.transportation.Transportation
+api-version: '1.21'
+load: STARTUP
+folia-supported: true
+authors: [ Cinnaio ]
+depend: [Vault]
+
+commands:
+  transportation:
+    description: Main command for Transportation plugin
+    aliases: [tra]
+    usage: /tra help

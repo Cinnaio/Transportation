@@ -1,0 +1,29 @@
+# Transportation 配置文件
+garage:
+  # 玩家默认拥有的车库容量限制
+  default-limit: 5
+  # 召唤载具的冷却时间（秒）
+  summon-cooldown-seconds: 60
+  # 召唤载具时，载具生成在玩家前方的距离（格）
+  spawn-distance: 2.0
+  # 默认生成的载具类型（当无法识别模型名称时使用）
+  # 可用值参考 Spigot EntityType 枚举: MINECART, BOAT, HORSE, etc.
+  default-vehicle-type: "MINECART"
+
+interaction:
+  # 绑定载具时 (/tra bind) 的最大射线检测距离（格）
+  raytrace-distance: 5.0
+  # 允许被绑定的实体类型列表
+  # 必须是 Spigot EntityType 枚举值
+  allowed-entities:
+    - "HORSE"
+    - "DONKEY"
+    - "MULE"
+    - "ALLAY"
+    - "STRIDER"
+
+economy:
+  # 是否启用经济系统集成 (需要 Vault)
+  enabled: true
+  # 复活载具的费用
+  fix-cost: 100.0
