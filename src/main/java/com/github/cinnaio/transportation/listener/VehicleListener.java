@@ -137,7 +137,7 @@ public class VehicleListener implements Listener {
         for (Entity entity : event.getChunk().getEntities()) {
             if (entity.getPersistentDataContainer().has(keyId, PersistentDataType.STRING)) {
                 String code = entity.getPersistentDataContainer().get(keyId, PersistentDataType.STRING);
-                vehicleManager.updateVehicleLocation(code, entity.getLocation());
+                vehicleManager.handleChunkUnloadEntity(code, entity);
             }
         }
     }
@@ -158,9 +158,27 @@ public class VehicleListener implements Listener {
 
     @EventHandler
     public void onPlayerInteractEntity(PlayerInteractEntityEvent event) {
-        Player player = event.getPlayer();
-        ItemStack item = player.getInventory().getItemInMainHand();
+        Entity entity = event.getRightClicked();
+        PersistentDataContainer container = entity.getPersistentDataContainer();
         
+        // If entity is not a vehicle, do nothing (let other plugins handle it)
+        if (!container.has(keyId, PersistentDataType.STRING)) return;
+        
+        Player player = event.getPlayer();
+        ItemStack itemUsed = player.getInventory().getItem(event.getHand());
+        
+        // 1. Prevent unauthorized renaming (Name Tag)
+        if (itemUsed != null && itemUsed.getType() == Material.NAME_TAG) {
+            String identityCode = container.get(keyId, PersistentDataType.STRING);
+            if (!vehicleManager.isVehicleOwner(player, identityCode)) {
+                event.setCancelled(true);
+                player.sendMessage(languageManager.get("prefix") + languageManager.get("not-owner"));
+                return;
+            }
+        }
+
+        // 2. Key Recall Logic
+        ItemStack item = player.getInventory().getItemInMainHand();
         if (item == null || item.getType() == Material.AIR) {
             return;
         }
@@ -171,12 +189,6 @@ public class VehicleListener implements Listener {
         
         String keyIdentity = getIdentityFromKey(item);
         if (keyIdentity == null) return;
-        
-        Entity entity = event.getRightClicked();
-        PersistentDataContainer container = entity.getPersistentDataContainer();
-        
-        // If entity is not a vehicle, do nothing (let other plugins handle it)
-        if (!container.has(keyId, PersistentDataType.STRING)) return;
         
         String entityIdentity = container.get(keyId, PersistentDataType.STRING);
         

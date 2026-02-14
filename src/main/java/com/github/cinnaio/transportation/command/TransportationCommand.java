@@ -61,13 +61,27 @@ public class TransportationCommand implements TabExecutor {
                 RayTraceResult result = player.getWorld().rayTraceEntities(player.getEyeLocation(), player.getEyeLocation().getDirection(), configManager.getRaytraceDistance(), entity -> !entity.getUniqueId().equals(player.getUniqueId()));
                 if (result != null && result.getHitEntity() != null) {
                     Entity entity = result.getHitEntity();
-                    // Check if entity has owner (this is tricky without metadata, assuming raw entities are unowned unless tagged)
-                    // For now, assume if it's not in our DB, it's bindable.
-                    // Ideally we check NBT or metadata.
-                    // For this task, simply proceed to create a vehicle entry.
-                    // Use entity type or name as model.
-                    String model = entity.getCustomName() != null ? entity.getCustomName() : entity.getType().name();
-                    vehicleManager.createBoundVehicle(player, model, entity);
+                    
+                    String modelName;
+                    String modelId = "vanilla";
+
+                    if (args.length >= 2) {
+                        String input = args[1];
+                        if (input.contains(":")) {
+                            String[] parts = input.split(":", 2);
+                            modelName = parts[0];
+                            if (parts.length > 1 && !parts[1].isEmpty()) {
+                                modelId = parts[1];
+                            }
+                        } else {
+                            modelName = input;
+                        }
+                    } else {
+                        // Use entity type or name as model
+                        modelName = entity.getCustomName() != null ? entity.getCustomName() : entity.getType().name();
+                    }
+
+                    vehicleManager.createBoundVehicle(player, modelName, modelId, entity);
                 } else {
                     player.sendMessage(languageManager.get("prefix") + languageManager.get("no-entity-sight"));
                 }
@@ -207,27 +221,27 @@ public class TransportationCommand implements TabExecutor {
             "",
             " &c/tra buy &f<model&f>",
             " &7  └ 购买指定载具",
-            " &c/tra out &f<id/model&f>",
+            " &c/tra out &f<model&f>",
             " &7  └ 召唤载具到当前位置",
-            " &c/tra in &f<id/model&f>",
+            " &c/tra in &f<model&f>",
             " &7  └ 回收当前载具",
-            " &c/tra freeze &f<id/model&f>",
+            " &c/tra freeze &f<model&f>",
             " &7  └ 冻结 / 解冻载具",
-            " &c/tra bind",
-            " &7  └ 绑定准心指向的载具",
-            " &c/tra unbind &f<id/model&f>",
+            " &c/tra bind &f[model:id]",
+            " &7  └ 绑定准心指向的载具 (默认 vanilla)",
+            " &c/tra unbind &f<model&f>",
             " &7  └ 解绑或丢弃载具",
-            " &c/tra transfer &f<id/model&f> &f<player&f>",
+            " &c/tra transfer &f<model&f> &f<player&f>",
             " &7  └ 转让载具给其他玩家",
-            " &c/tra rekey &f<id/model&f>",
+            " &c/tra rekey &f<model&f>",
             " &7  └ 重置载具身份码",
-            " &c/tra keybind &f[id]",
+            " &c/tra keybind &f[model]",
             " &7  └ 将载具绑定到手中物品",
             " &c/tra unkeybind",
             " &7  └ 解除手中物品的绑定",
             " &c/tra list",
             " &7  └ 查看你拥有的载具列表",
-            " &c/tra fix &f<id/model>",
+            " &c/tra fix &f<model>",
             " &7  └ 修复/复活已损毁的载具",
             " &c/tra reload",
             " &7  └ 重载插件配置"
@@ -251,13 +265,25 @@ public class TransportationCommand implements TabExecutor {
                 // Return list of server vehicles
                 return Arrays.asList("Car", "Bike"); // Mock list
             }
+            if (sub.equals("bind")) {
+                // Return vehicle models
+                List<String> models = new ArrayList<>();
+                for (org.bukkit.entity.EntityType type : org.bukkit.entity.EntityType.values()) {
+                    if (type.isAlive() && type.isSpawnable()) {
+                        models.add(type.name().toLowerCase());
+                    }
+                }
+                return filter(models, args[1]);
+            }
             if (Arrays.asList("unbind", "transfer", "out", "in", "freeze", "unfreeze", "rekey", "keybind", "fix").contains(sub)) {
-                List<String> identities = new ArrayList<>();
+                List<String> options = new ArrayList<>();
                 List<com.github.cinnaio.transportation.model.GarageVehicle> vehicles = vehicleManager.getPlayerVehicles(((Player)sender).getUniqueId());
                 for (com.github.cinnaio.transportation.model.GarageVehicle v : vehicles) {
-                    identities.add(v.getIdentityCode());
+                    if (!options.contains(v.getModel())) {
+                        options.add(v.getModel());
+                    }
                 }
-                return filter(identities, args[1]);
+                return filter(options, args[1]);
             }
         }
         

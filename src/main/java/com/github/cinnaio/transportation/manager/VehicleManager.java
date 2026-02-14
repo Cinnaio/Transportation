@@ -41,6 +41,8 @@ import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.attribute.Attribute;
 import org.bukkit.attribute.AttributeInstance;
 import org.bukkit.entity.LivingEntity;
+import org.bukkit.potion.PotionEffect;
+import org.bukkit.potion.PotionEffectType;
 import org.bukkit.Registry;
 import org.bukkit.NamespacedKey;
 
@@ -63,6 +65,7 @@ public class VehicleManager {
     private final Set<UUID> frozenVehicles = new HashSet<>();
 
     private final JavaPlugin plugin;
+    private final boolean isFolia;
 
     public VehicleManager(JavaPlugin plugin, VehicleDAO vehicleDAO, LogDAO logDAO, EconomyManager economyManager, ConfigManager configManager, LanguageManager languageManager) {
         this.plugin = plugin;
@@ -71,6 +74,13 @@ public class VehicleManager {
         this.economyManager = economyManager;
         this.configManager = configManager;
         this.languageManager = languageManager;
+        
+        boolean folia = false;
+        try {
+            Class.forName("io.papermc.paper.threadedregions.scheduler.RegionScheduler");
+            folia = true;
+        } catch (Exception e) {}
+        this.isFolia = folia;
     }
     
     // Register active entity (called by listener when chunk loads or entity spawns)
@@ -378,35 +388,79 @@ public class VehicleManager {
 
             // Despawn logic
             Entity entity = forceGetEntity(vehicle.getIdentityCode());
-            boolean removed = false;
             
             if (entity != null) {
-                // Save entity state before removing
-                String serializedData = serializeEntityData(entity);
-                vehicle.setStatsExtended(serializedData);
-                
-                entity.remove();
-                removed = true;
+                final GarageVehicle finalVehicle = vehicle;
+                runOnEntity(entity, () -> {
+                    String serializedData = serializeEntityData(entity);
+                    finalVehicle.setStatsExtended(serializedData);
+                    entity.remove();
+                    
+                    runOnGlobal(() -> finalizeRecall(player, finalVehicle, true));
+                });
+                return;
             }
             
-            // If not found in memory (e.g. restart), we might need to rely on listener or just warn
-            if (!removed) {
-                // Warning: Entity might still be in the world if it was unloaded or plugin restarted
-                // However, we still mark it as in garage so player can summon it again (and we spawn a new one).
-                // The old one will be "ghost" vehicle until we implement scanning or cleaning.
-                player.sendMessage(languageManager.get("prefix") + languageManager.get("warning-entity-not-found"));
+            // Fallback: Scan all worlds (Skip on Folia to avoid unsafe access)
+            boolean removed = false;
+            if (!isFolia) {
+                NamespacedKey key = new NamespacedKey(plugin, "vehicle_identity_code");
+                for (org.bukkit.World w : Bukkit.getWorlds()) {
+                    for (Entity e : w.getEntities()) {
+                        PersistentDataContainer container = e.getPersistentDataContainer();
+                        if (container.has(key, PersistentDataType.STRING)) {
+                            String code = container.get(key, PersistentDataType.STRING);
+                            if (code.equals(vehicle.getIdentityCode())) {
+                                String serializedData = serializeEntityData(e);
+                                vehicle.setStatsExtended(serializedData);
+                                e.remove();
+                                removed = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (removed) break;
+                }
             }
             
-            activeVehicleEntities.remove(vehicle.getIdentityCode());
-            
-            vehicle.setInGarage(true);
-            vehicleDAO.updateGarageVehicle(vehicle);
-            player.sendMessage(languageManager.get("prefix") + languageManager.get("recall-success"));
-
-            logDAO.logGarageOp(player.getUniqueId(), player.getName(), vehicle.getIdentityCode(), "RECALL", true, null);
+            finalizeRecall(player, vehicle, removed);
 
         } catch (SQLException e) {
             e.printStackTrace();
+        }
+    }
+    
+    private void finalizeRecall(Player player, GarageVehicle vehicle, boolean removed) {
+        if (!removed) {
+            player.sendMessage(languageManager.get("prefix") + languageManager.get("warning-entity-not-found"));
+        }
+        
+        activeVehicleEntities.remove(vehicle.getIdentityCode());
+        
+        vehicle.setInGarage(true);
+        try {
+            vehicleDAO.updateGarageVehicle(vehicle);
+            player.sendMessage(languageManager.get("prefix") + languageManager.get("recall-success"));
+            logDAO.logGarageOp(player.getUniqueId(), player.getName(), vehicle.getIdentityCode(), "RECALL", true, null);
+        } catch (SQLException e) {
+            e.printStackTrace();
+            player.sendMessage(languageManager.get("prefix") + languageManager.get("database-error"));
+        }
+    }
+
+    private void runOnEntity(Entity entity, Runnable task) {
+        if (isFolia) {
+            entity.getScheduler().run(plugin, t -> task.run(), null);
+        } else {
+            task.run();
+        }
+    }
+
+    private void runOnGlobal(Runnable task) {
+        if (isFolia) {
+            Bukkit.getGlobalRegionScheduler().run(plugin, t -> task.run());
+        } else {
+            Bukkit.getScheduler().runTask(plugin, task);
         }
     }
 
@@ -460,7 +514,7 @@ public class VehicleManager {
     
     public void toggleFreeze(Player player, String identityCode) {
         try {
-            GarageVehicle vehicle = vehicleDAO.getGarageVehicle(identityCode);
+            GarageVehicle vehicle = findVehicle(player, identityCode);
             if(vehicle == null) {
                 player.sendMessage(languageManager.get("prefix") + languageManager.get("vehicle-not-found"));
                 return;
@@ -475,7 +529,11 @@ public class VehicleManager {
             vehicle.setFrozen(newState);
             vehicleDAO.updateGarageVehicle(vehicle);
             
-            player.sendMessage(languageManager.get("prefix") + languageManager.get("freeze-success").replace("%status%", String.valueOf(newState)));
+            if (newState) {
+                player.sendMessage(languageManager.get("prefix") + languageManager.get("freeze-enabled"));
+            } else {
+                player.sendMessage(languageManager.get("prefix") + languageManager.get("freeze-disabled"));
+            }
              logDAO.logOwnershipOp(player.getUniqueId(), player.getName(), vehicle.getIdentityCode(), vehicle.getModel(), newState ? "FREEZE" : "UNFREEZE", "", true, null);
 
         } catch (SQLException e) {
@@ -527,22 +585,6 @@ public class VehicleManager {
             return;
         }
 
-        if (vehicle == null) {
-            // Try to find by model name if inputId is not a valid identity code
-            // This is a simple fallback, iterating owned vehicles
-            try {
-                List<GarageVehicle> owned = vehicleDAO.getPlayerVehicles(player.getUniqueId());
-                for (GarageVehicle v : owned) {
-                    if (v.getModel().equalsIgnoreCase(inputId)) {
-                        vehicle = v;
-                        break;
-                    }
-                }
-            } catch (SQLException e) {
-                e.printStackTrace();
-            }
-        }
-        
         if (vehicle == null) {
             player.sendMessage(languageManager.get("prefix") + languageManager.get("vehicle-not-found"));
             return;
@@ -634,6 +676,17 @@ public class VehicleManager {
             return false;
         }
     }
+    
+    public boolean isVehicleOwner(Player player, String identityCode) {
+        try {
+            GarageVehicle vehicle = vehicleDAO.getGarageVehicle(identityCode);
+            if (vehicle == null) return false;
+            return player.getUniqueId().equals(vehicle.getOwnerUuid());
+        } catch (SQLException e) {
+            e.printStackTrace();
+            return false;
+        }
+    }
 
     public void freezeVehicle(UUID vehicleUuid) {
         frozenVehicles.add(vehicleUuid);
@@ -719,7 +772,7 @@ public class VehicleManager {
         return identityCode.equals(keyId);
     }
 
-    public void createBoundVehicle(Player player, String modelName, Entity entity) {
+    public void createBoundVehicle(Player player, String modelName, String modelId, Entity entity) {
         // Used for /vehicle bind
          try {
             // Check allowed entity types
@@ -763,7 +816,7 @@ public class VehicleManager {
                     player.getName(),
                     identityCode,
                     modelName,
-                    "custom",
+                    modelId,
                     "{}",
                     "{}",
                     false, // It's in the world (we are looking at it)
@@ -839,6 +892,23 @@ public class VehicleManager {
         }
     }
     
+    public void handleChunkUnloadEntity(String identityCode, Entity entity) {
+        try {
+            GarageVehicle vehicle = vehicleDAO.getGarageVehicle(identityCode);
+            if (vehicle != null) {
+                String serializedData = serializeEntityData(entity);
+                vehicle.setStatsExtended(serializedData);
+                vehicle.setInGarage(true);
+                vehicleDAO.updateGarageVehicle(vehicle);
+            }
+            entity.remove();
+            activeVehicleEntities.remove(identityCode);
+            updateVehicleLocation(identityCode, null);
+        } catch (SQLException e) {
+            e.printStackTrace();
+        }
+    }
+    
     // Helper to find vehicle by ID or Model Name (First match)
     private GarageVehicle findVehicle(Player player, String arg) throws SQLException {
         GarageVehicle vehicle = vehicleDAO.getGarageVehicle(arg);
@@ -863,7 +933,7 @@ public class VehicleManager {
     public void unbindVehicleKey(Player player) {
         ItemStack item = player.getInventory().getItemInMainHand();
         if (item == null || item.getType().isAir()) {
-             player.sendMessage(languageManager.get("prefix") + languageManager.get("bind-hand-empty"));
+             player.sendMessage(languageManager.get("prefix") + languageManager.get("key-hand-empty"));
              return;
         }
 
@@ -872,7 +942,7 @@ public class VehicleManager {
         NamespacedKey key = new NamespacedKey(plugin, "vehicle_identity_code");
         
         if (!container.has(key, PersistentDataType.STRING)) {
-             player.sendMessage(languageManager.get("prefix") + "§cThis item is not a bound key.");
+             player.sendMessage(languageManager.get("prefix") + languageManager.get("key-not-bound"));
              return;
         }
         
@@ -916,7 +986,7 @@ public class VehicleManager {
 
             ItemStack item = player.getInventory().getItemInMainHand();
             if (item == null || item.getType().isAir()) {
-                 player.sendMessage(languageManager.get("prefix") + "§cYou must hold an item to bind.");
+                 player.sendMessage(languageManager.get("prefix") + languageManager.get("bind-hand-empty"));
                  return;
             }
 
@@ -1051,10 +1121,37 @@ public class VehicleManager {
                 if (maxHealth != null) json.addProperty("maxHealth", maxHealth.getBaseValue());
             }
             
+            // Speed (Fix: Check if restricted/saved in PDC)
+            double finalSpeed = -1.0;
+            NamespacedKey savedSpeedKey = new NamespacedKey(plugin, "transportation_saved_speed");
+            if (entity.getPersistentDataContainer().has(savedSpeedKey, PersistentDataType.DOUBLE)) {
+                finalSpeed = entity.getPersistentDataContainer().get(savedSpeedKey, PersistentDataType.DOUBLE);
+            }
+            
             type = Registry.ATTRIBUTE.get(NamespacedKey.minecraft("generic.movement_speed"));
             if (type != null) {
                 AttributeInstance speed = living.getAttribute(type);
-                if (speed != null) json.addProperty("speed", speed.getBaseValue());
+                if (speed != null) {
+                    if (finalSpeed < 0) finalSpeed = speed.getBaseValue();
+                    json.addProperty("speed", finalSpeed);
+                }
+            }
+
+            // Potion Effects
+            java.util.Collection<PotionEffect> effects = living.getActivePotionEffects();
+            if (!effects.isEmpty()) {
+                com.google.gson.JsonArray effectsJson = new com.google.gson.JsonArray();
+                for (PotionEffect effect : effects) {
+                    JsonObject effectObj = new JsonObject();
+                    effectObj.addProperty("type", effect.getType().getKey().toString());
+                    effectObj.addProperty("duration", effect.getDuration());
+                    effectObj.addProperty("amplifier", effect.getAmplifier());
+                    effectObj.addProperty("ambient", effect.isAmbient());
+                    effectObj.addProperty("particles", effect.hasParticles());
+                    effectObj.addProperty("icon", effect.hasIcon());
+                    effectsJson.add(effectObj);
+                }
+                json.add("potionEffects", effectsJson);
             }
         }
 
@@ -1064,12 +1161,23 @@ public class VehicleManager {
             json.addProperty("tamed", tameable.isTamed());
         }
         
-        // AbstractHorse (Saddle)
+        // AbstractHorse (Saddle + Jump Strength)
         if (entity instanceof AbstractHorse) {
             AbstractHorse abstractHorse = (AbstractHorse) entity;
             ItemStack saddle = abstractHorse.getInventory().getSaddle();
             if (saddle != null) {
                 json.addProperty("saddle", itemStackToBase64(saddle));
+            }
+            
+            // Jump Strength (Try generic first, then horse legacy)
+            Attribute type = Registry.ATTRIBUTE.get(NamespacedKey.minecraft("generic.jump_strength"));
+            if (type == null) {
+                type = Registry.ATTRIBUTE.get(NamespacedKey.minecraft("horse.jump_strength"));
+            }
+            
+            if (type != null) {
+                AttributeInstance jump = abstractHorse.getAttribute(type);
+                if (jump != null) json.addProperty("jumpStrength", jump.getBaseValue());
             }
         }
         
@@ -1083,12 +1191,6 @@ public class VehicleManager {
             if (armor != null) {
                 json.addProperty("armor", itemStackToBase64(armor));
             }
-            
-            Attribute type = Registry.ATTRIBUTE.get(NamespacedKey.minecraft("generic.jump_strength"));
-            if (type != null) {
-                AttributeInstance jump = horse.getAttribute(type);
-                if (jump != null) json.addProperty("jumpStrength", jump.getBaseValue());
-            }
         }
         
         // Llama
@@ -1100,12 +1202,6 @@ public class VehicleManager {
             ItemStack decor = llama.getInventory().getDecor();
             if (decor != null) {
                 json.addProperty("decor", itemStackToBase64(decor));
-            }
-            
-            Attribute type = Registry.ATTRIBUTE.get(NamespacedKey.minecraft("generic.jump_strength"));
-            if (type != null) {
-                AttributeInstance jump = llama.getAttribute(type);
-                if (jump != null) json.addProperty("jumpStrength", jump.getBaseValue());
             }
         }
         
@@ -1150,6 +1246,26 @@ public class VehicleManager {
                         if (speed != null) speed.setBaseValue(json.get("speed").getAsDouble());
                     }
                 }
+
+                // Potion Effects
+                if (json.has("potionEffects")) {
+                    com.google.gson.JsonArray effectsJson = json.getAsJsonArray("potionEffects");
+                    for (com.google.gson.JsonElement element : effectsJson) {
+                        JsonObject effectObj = element.getAsJsonObject();
+                        String typeKey = effectObj.get("type").getAsString();
+                        org.bukkit.potion.PotionEffectType pType = org.bukkit.Registry.POTION_EFFECT_TYPE.get(NamespacedKey.fromString(typeKey));
+                        
+                        if (pType != null) {
+                            int duration = effectObj.get("duration").getAsInt();
+                            int amplifier = effectObj.get("amplifier").getAsInt();
+                            boolean ambient = effectObj.get("ambient").getAsBoolean();
+                            boolean particles = effectObj.get("particles").getAsBoolean();
+                            boolean icon = effectObj.get("icon").getAsBoolean();
+                            
+                            living.addPotionEffect(new org.bukkit.potion.PotionEffect(pType, duration, amplifier, ambient, particles, icon));
+                        }
+                    }
+                }
             }
             
             // Custom Name
@@ -1169,11 +1285,21 @@ public class VehicleManager {
                 }
             }
             
-            // AbstractHorse (Saddle)
+            // AbstractHorse (Saddle + Jump Strength)
             if (entity instanceof AbstractHorse) {
                 AbstractHorse abstractHorse = (AbstractHorse) entity;
                 if (json.has("saddle")) {
                     abstractHorse.getInventory().setSaddle(itemStackFromBase64(json.get("saddle").getAsString()));
+                }
+                if (json.has("jumpStrength")) {
+                    Attribute type = Registry.ATTRIBUTE.get(NamespacedKey.minecraft("generic.jump_strength"));
+                    if (type == null) {
+                        type = Registry.ATTRIBUTE.get(NamespacedKey.minecraft("horse.jump_strength"));
+                    }
+                    if (type != null) {
+                        AttributeInstance jump = abstractHorse.getAttribute(type);
+                        if (jump != null) jump.setBaseValue(json.get("jumpStrength").getAsDouble());
+                    }
                 }
             }
 
@@ -1183,13 +1309,6 @@ public class VehicleManager {
                 if (json.has("color")) horse.setColor(Horse.Color.valueOf(json.get("color").getAsString()));
                 if (json.has("style")) horse.setStyle(Horse.Style.valueOf(json.get("style").getAsString()));
                 if (json.has("armor")) horse.getInventory().setArmor(itemStackFromBase64(json.get("armor").getAsString()));
-                if (json.has("jumpStrength")) {
-                    Attribute type = Registry.ATTRIBUTE.get(NamespacedKey.minecraft("generic.jump_strength"));
-                    if (type != null) {
-                        AttributeInstance jump = horse.getAttribute(type);
-                        if (jump != null) jump.setBaseValue(json.get("jumpStrength").getAsDouble());
-                    }
-                }
             }
             
             // Llama
@@ -1198,13 +1317,6 @@ public class VehicleManager {
                 if (json.has("color")) llama.setColor(Llama.Color.valueOf(json.get("color").getAsString()));
                 if (json.has("strength")) llama.setStrength(json.get("strength").getAsInt());
                 if (json.has("decor")) llama.getInventory().setDecor(itemStackFromBase64(json.get("decor").getAsString()));
-                if (json.has("jumpStrength")) {
-                    Attribute type = Registry.ATTRIBUTE.get(NamespacedKey.minecraft("generic.jump_strength"));
-                    if (type != null) {
-                        AttributeInstance jump = llama.getAttribute(type);
-                        if (jump != null) jump.setBaseValue(json.get("jumpStrength").getAsDouble());
-                    }
-                }
             }
             
             // ChestedHorse

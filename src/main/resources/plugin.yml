@@ -1,5 +1,5 @@
 name: Transportation
-version: '1.0.0'
+version: '${version}'
 main: com.github.cinnaio.transportation.Transportation
 api-version: '1.21'
 load: STARTUP
