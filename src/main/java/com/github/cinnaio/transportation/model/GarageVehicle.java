@@ -9,19 +9,21 @@ public class GarageVehicle {
     private String identityCode;
     private String model;
     private String modelId;
+    private int modelIndex;
     private String statsOriginal; // JSON string
     private String statsExtended; // JSON string
     private boolean inGarage;
     private boolean frozen;
     private boolean destroyed;
 
-    public GarageVehicle(int id, UUID ownerUuid, String ownerName, String identityCode, String model, String modelId, String statsOriginal, String statsExtended, boolean inGarage, boolean frozen, boolean destroyed) {
+    public GarageVehicle(int id, UUID ownerUuid, String ownerName, String identityCode, String model, String modelId, int modelIndex, String statsOriginal, String statsExtended, boolean inGarage, boolean frozen, boolean destroyed) {
         this.id = id;
         this.ownerUuid = ownerUuid;
         this.ownerName = ownerName;
         this.identityCode = identityCode;
         this.model = model;
         this.modelId = modelId;
+        this.modelIndex = modelIndex;
         this.statsOriginal = statsOriginal;
         this.statsExtended = statsExtended;
         this.inGarage = inGarage;
@@ -38,6 +40,8 @@ public class GarageVehicle {
     public void setIdentityCode(String identityCode) { this.identityCode = identityCode; }
     public String getModel() { return model; }
     public String getModelId() { return modelId; }
+    public int getModelIndex() { return modelIndex; }
+    public void setModelIndex(int modelIndex) { this.modelIndex = modelIndex; }
     public String getStatsOriginal() { return statsOriginal; }
     public String getStatsExtended() { return statsExtended; }
     public void setStatsExtended(String statsExtended) { this.statsExtended = statsExtended; }

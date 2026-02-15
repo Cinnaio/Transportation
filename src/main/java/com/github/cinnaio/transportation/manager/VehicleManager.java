@@ -66,6 +66,8 @@ public class VehicleManager {
 
     private final JavaPlugin plugin;
     private final boolean isFolia;
+    private static final java.util.UUID NULL_UUID = java.util.UUID.fromString("00000000-0000-0000-0000-000000000000");
+    private final java.util.Map<String, Long> lastSnapshots = new java.util.concurrent.ConcurrentHashMap<>();
 
     public VehicleManager(JavaPlugin plugin, VehicleDAO vehicleDAO, LogDAO logDAO, EconomyManager economyManager, ConfigManager configManager, LanguageManager languageManager) {
         this.plugin = plugin;
@@ -115,28 +117,124 @@ public class VehicleManager {
         }
         return entity;
     }
+    
+    private String decodeStatsString(String stored) {
+        if (stored == null || stored.isEmpty()) return stored;
+        char c = stored.charAt(0);
+        if (c == '{' || c == '[') return stored;
+        try {
+            byte[] decoded = java.util.Base64.getDecoder().decode(stored);
+            java.io.InputStream base = new java.io.ByteArrayInputStream(decoded);
+            java.io.InputStream in;
+            if (decoded.length >= 2 && decoded[0] == (byte) 0x1f && decoded[1] == (byte) 0x8b) {
+                in = new java.util.zip.GZIPInputStream(base);
+            } else {
+                in = base;
+            }
+            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[256];
+            int len;
+            while ((len = in.read(buf)) > 0) {
+                out.write(buf, 0, len);
+            }
+            return out.toString(java.nio.charset.StandardCharsets.UTF_8.name());
+        } catch (Exception e) {
+            return stored;
+        }
+    }
+
+    private String encodeStatsJson(String json) {
+        if (json == null || json.isEmpty()) return json;
+        try {
+            byte[] raw = json.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+            try (java.util.zip.GZIPOutputStream gzip = new java.util.zip.GZIPOutputStream(baos)) {
+                gzip.write(raw);
+            }
+            byte[] compressed = baos.toByteArray();
+            return java.util.Base64.getEncoder().encodeToString(compressed);
+        } catch (Exception e) {
+            return json;
+        }
+    }
+
+    public com.google.gson.JsonObject getStatsSnapshot(com.github.cinnaio.transportation.model.GarageVehicle v) {
+        try {
+            String stats = v.getStatsExtended();
+            if (stats != null && !stats.isEmpty()) {
+                String json = decodeStatsString(stats);
+                return com.google.gson.JsonParser.parseString(json).getAsJsonObject();
+            }
+            Entity e = forceGetEntity(v.getIdentityCode());
+            if (e != null) {
+                String json = serializeEntityData(e);
+                com.google.gson.JsonObject jo = com.google.gson.JsonParser.parseString(json).getAsJsonObject();
+                String encoded = encodeStatsJson(json);
+                runAsync(() -> {
+                    try {
+                        v.setStatsExtended(encoded);
+                        vehicleDAO.updateGarageVehicle(v);
+                    } catch (SQLException ex) {
+                        ex.printStackTrace();
+                    }
+                });
+                return jo;
+            }
+        } catch (Exception ignored) {}
+        return new com.google.gson.JsonObject();
+    }
+
+    public com.google.gson.JsonObject readStatsExtended(com.github.cinnaio.transportation.model.GarageVehicle v) {
+        try {
+            String stats = v.getStatsExtended();
+            if (stats == null || stats.isEmpty()) return new com.google.gson.JsonObject();
+            String json = decodeStatsString(stats);
+            return com.google.gson.JsonParser.parseString(json).getAsJsonObject();
+        } catch (Exception e) {
+            return new com.google.gson.JsonObject();
+        }
+    }
+    
+    public String buildStatusHover(com.github.cinnaio.transportation.model.GarageVehicle v) {
+        if (v.isDestroyed()) {
+            return "已损毁\n使用 /tra fix 可尝试修复";
+        }
+        if (v.isFrozen()) {
+            return "已冻结\n无法移动，使用 /tra freeze 解除";
+        }
+        if (v.isInGarage()) {
+            return "已存放至兽栏";
+        }
+        Location loc = vehicleLocations.get(v.getIdentityCode());
+        if (loc != null && loc.getWorld() != null) {
+            return "位置: " + loc.getWorld().getName() + "\n坐标: " + loc.getBlockX() + ", " + loc.getBlockY() + ", " + loc.getBlockZ();
+        }
+        return "位置未知";
+    }
 
     private void invalidateKey(ItemStack item) {
         if (item == null || !item.hasItemMeta()) return;
         ItemMeta meta = item.getItemMeta();
+        PersistentDataContainer pdc = meta.getPersistentDataContainer();
+        NamespacedKey invalidKey = new NamespacedKey(plugin, "vehicle_key_invalid");
+        if (pdc.has(invalidKey, PersistentDataType.BYTE)) {
+            item.setItemMeta(meta);
+            return;
+        }
+        pdc.set(invalidKey, PersistentDataType.BYTE, (byte)1);
+        
         List<net.kyori.adventure.text.Component> lore = meta.lore();
-        if (lore == null) lore = new ArrayList<>();
-        
-        // Check if already marked
-        // Simple check: convert to string and check? Or just append.
-        // To avoid duplicates, maybe we should check.
-        // But since we use component, it's hard to check content without serialization.
-        // We'll just append for now, or check if last line is the invalid marker.
-        // Assuming user won't spam click 100 times.
-        // Actually, if we update lore, the item changes, so next click it might not match?
-        // No, identity code is still there.
-        
-        // Let's try to detect if last line is already invalid marker.
-        // For simplicity, just append.
-        
-        lore.add(languageManager.getComponent("key-lore-invalid"));
-        meta.lore(lore);
-        // Reset display name to default
+        List<net.kyori.adventure.text.Component> newLore = new ArrayList<>();
+        if (lore != null) {
+            for (net.kyori.adventure.text.Component c : lore) {
+                String plain = net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer.plainText().serialize(c);
+                if (plain == null || !plain.contains("已失效")) {
+                    newLore.add(c);
+                }
+            }
+        }
+        newLore.add(languageManager.getComponent("key-lore-invalid"));
+        meta.lore(newLore);
         meta.displayName(null);
 
         item.setItemMeta(meta);
@@ -193,6 +291,7 @@ public class VehicleManager {
             }
 
             String identityCode = generateIdentityCode();
+            int nextIndex = vehicleDAO.getNextModelIndex(player.getUniqueId(), serverVehicle.getName());
             GarageVehicle newVehicle = new GarageVehicle(
                     0, // ID auto-increment
                     player.getUniqueId(),
@@ -200,6 +299,7 @@ public class VehicleManager {
                     identityCode,
                     serverVehicle.getName(),
                     serverVehicle.getModel(),
+                    nextIndex,
                     serverVehicle.getStatsOriginal(),
                     serverVehicle.getStatsExtended(),
                     true, // In garage by default
@@ -247,6 +347,13 @@ public class VehicleManager {
             
             if (vehicle == null) {
                 player.sendMessage(languageManager.get("prefix") + languageManager.get("vehicle-not-found"));
+                return;
+            }
+
+            // Block summoning unowned vehicles even with a key
+            if (vehicle.getOwnerUuid() != null && vehicle.getOwnerUuid().equals(NULL_UUID)) {
+                invalidateKeyIfHeld(player, identityCode);
+                player.sendMessage(languageManager.get("prefix") + languageManager.get("vehicle-unbound"));
                 return;
             }
 
@@ -315,9 +422,9 @@ public class VehicleManager {
             // Register in memory
             activeVehicleEntities.put(vehicle.getIdentityCode(), entity.getUniqueId());
 
-            // Apply saved stats
             if (vehicle.getStatsExtended() != null && !vehicle.getStatsExtended().isEmpty()) {
-                applyEntityData(entity, vehicle.getStatsExtended());
+                String json = decodeStatsString(vehicle.getStatsExtended());
+                applyEntityData(entity, json);
             }
 
             // Ensure ownership is correct for Tameables
@@ -371,6 +478,13 @@ public class VehicleManager {
                  return;
             }
             
+            // Block recalling unowned vehicles even with a key
+            if (vehicle.getOwnerUuid() != null && vehicle.getOwnerUuid().equals(NULL_UUID)) {
+                invalidateKeyIfHeld(player, identityCode);
+                player.sendMessage(languageManager.get("prefix") + languageManager.get("vehicle-unbound"));
+                return;
+            }
+
             if (!vehicle.getOwnerUuid().equals(player.getUniqueId()) && !isKeyAccess) {
                 player.sendMessage(languageManager.get("prefix") + languageManager.get("not-owner"));
                 return;
@@ -393,7 +507,7 @@ public class VehicleManager {
                 final GarageVehicle finalVehicle = vehicle;
                 runOnEntity(entity, () -> {
                     String serializedData = serializeEntityData(entity);
-                    finalVehicle.setStatsExtended(serializedData);
+                    finalVehicle.setStatsExtended(encodeStatsJson(serializedData));
                     entity.remove();
                     
                     runOnGlobal(() -> finalizeRecall(player, finalVehicle, true));
@@ -412,7 +526,7 @@ public class VehicleManager {
                             String code = container.get(key, PersistentDataType.STRING);
                             if (code.equals(vehicle.getIdentityCode())) {
                                 String serializedData = serializeEntityData(e);
-                                vehicle.setStatsExtended(serializedData);
+                                vehicle.setStatsExtended(encodeStatsJson(serializedData));
                                 e.remove();
                                 removed = true;
                                 break;
@@ -463,6 +577,14 @@ public class VehicleManager {
             Bukkit.getScheduler().runTask(plugin, task);
         }
     }
+    
+    private void runAsync(Runnable task) {
+        if (isFolia) {
+            Bukkit.getAsyncScheduler().runNow(plugin, t -> task.run());
+        } else {
+            Bukkit.getScheduler().runTaskAsynchronously(plugin, task);
+        }
+    }
 
     public void transferVehicle(Player sender, String identityCode, Player target) {
         try {
@@ -479,16 +601,31 @@ public class VehicleManager {
                 return;
             }
 
-            vehicle.setOwnerUuid(target.getUniqueId());
-            vehicle.setOwnerName(target.getName());
-            vehicleDAO.updateGarageVehicle(vehicle);
-
-            // Update active entity custom name if it exists (to show new owner)
+            // If entity is currently active in world, persist its latest stats before transferring
             UUID activeEntityUuid = activeVehicleEntities.get(identityCode);
             if (activeEntityUuid != null) {
                 Entity entity = Bukkit.getEntity(activeEntityUuid);
                 if (entity != null) {
+                    String serializedData = serializeEntityData(entity);
+                    vehicle.setStatsExtended(encodeStatsJson(serializedData));
+                }
+            }
+
+            vehicle.setOwnerUuid(target.getUniqueId());
+            vehicle.setOwnerName(target.getName());
+            vehicle.setModelIndex(vehicleDAO.getNextModelIndex(target.getUniqueId(), vehicle.getModel()));
+            vehicleDAO.updateGarageVehicle(vehicle);
+
+            // Update active entity custom name if it exists (to show new owner)
+            if (activeEntityUuid != null) {
+                Entity entity = Bukkit.getEntity(activeEntityUuid);
+                if (entity != null) {
                     entity.setCustomName(vehicle.getModel() + " (" + vehicle.getOwnerName() + ")");
+                    if (entity instanceof org.bukkit.entity.Tameable tameable) {
+                        if (tameable.isTamed()) {
+                            tameable.setOwner(Bukkit.getOfflinePlayer(target.getUniqueId()));
+                        }
+                    }
                 }
             }
 
@@ -718,6 +855,7 @@ public class VehicleManager {
         }
         
         speedAttr.setBaseValue(0.0);
+        snapshotEntityAsync(entity);
     }
     
     public void restoreVehicleMovement(Entity entity) {
@@ -745,6 +883,7 @@ public class VehicleManager {
                  speedAttr.setBaseValue(0.225); // Generic default
              }
         }
+        snapshotEntityAsync(entity);
     }
 
     private boolean isHoldingKey(Player player, String identityCode) {
@@ -770,6 +909,41 @@ public class VehicleManager {
         if (!container.has(key, PersistentDataType.STRING)) return false;
         String keyId = container.get(key, PersistentDataType.STRING);
         return identityCode.equals(keyId);
+    }
+
+    private void removeKeyBinding(ItemStack item) {
+        if (item == null || !item.hasItemMeta()) return;
+        ItemMeta meta = item.getItemMeta();
+        PersistentDataContainer container = meta.getPersistentDataContainer();
+        NamespacedKey key = new NamespacedKey(plugin, "vehicle_identity_code");
+        if (container.has(key, PersistentDataType.STRING)) {
+            container.remove(key);
+        }
+        List<net.kyori.adventure.text.Component> lore = meta.lore();
+        if (lore != null && !lore.isEmpty()) {
+            lore.remove(lore.size() - 1);
+            meta.lore(lore);
+        }
+        meta.displayName(null);
+        item.setItemMeta(meta);
+    }
+
+    private void invalidateAllKeysForIdentity(String identityCode) {
+        NamespacedKey key = new NamespacedKey(plugin, "vehicle_identity_code");
+        for (Player p : Bukkit.getOnlinePlayers()) {
+            for (int i = 0; i < p.getInventory().getSize(); i++) {
+                ItemStack item = p.getInventory().getItem(i);
+                if (item == null || !item.hasItemMeta()) continue;
+                PersistentDataContainer container = item.getItemMeta().getPersistentDataContainer();
+                if (container.has(key, PersistentDataType.STRING)) {
+                    String code = container.get(key, PersistentDataType.STRING);
+                    if (identityCode.equals(code)) {
+                        removeKeyBinding(item);
+                        p.getInventory().setItem(i, item);
+                    }
+                }
+            }
+        }
     }
 
     public void createBoundVehicle(Player player, String modelName, String modelId, Entity entity) {
@@ -807,8 +981,10 @@ public class VehicleManager {
             entity.setCustomName(modelName + " (" + player.getName() + ")");
             entity.setCustomNameVisible(true);
             
-            // Register in memory
             activeVehicleEntities.put(identityCode, entity.getUniqueId());
+            
+            String snapshot = serializeEntityData(entity);
+            String encodedSnapshot = encodeStatsJson(snapshot);
             
              GarageVehicle newVehicle = new GarageVehicle(
                     0, 
@@ -817,8 +993,9 @@ public class VehicleManager {
                     identityCode,
                     modelName,
                     modelId,
+                    vehicleDAO.getNextModelIndex(player.getUniqueId(), modelName),
                     "{}",
-                    "{}",
+                    encodedSnapshot,
                     false, // It's in the world (we are looking at it)
                     false,
                     false
@@ -842,25 +1019,58 @@ public class VehicleManager {
             }
             
             // Clean up entity visuals and NBT if currently loaded
-            UUID entityUuid = activeVehicleEntities.get(identityCode);
+            String realCode = vehicle.getIdentityCode();
+            UUID entityUuid = activeVehicleEntities.get(realCode);
+
             if (entityUuid != null) {
                 Entity entity = Bukkit.getEntity(entityUuid);
                 if (entity != null) {
                     entity.setCustomName(null);
                     entity.setCustomNameVisible(false);
                     entity.getPersistentDataContainer().remove(new NamespacedKey(plugin, "vehicle_identity_code"));
+                    if (entity instanceof org.bukkit.entity.Tameable tameable) {
+                        if (tameable.isTamed()) {
+                            tameable.setTamed(false);
+                            tameable.setOwner(null);
+                        }
+                    }
                 }
-                activeVehicleEntities.remove(identityCode);
+                activeVehicleEntities.remove(realCode);
+            }
+            
+            // Fallback: scan worlds to clear residual identity/name if active map missed it
+            if (!isFolia) {
+                NamespacedKey key = new NamespacedKey(plugin, "vehicle_identity_code");
+                for (org.bukkit.World w : Bukkit.getWorlds()) {
+                    for (Entity e : w.getEntities()) {
+                        PersistentDataContainer container = e.getPersistentDataContainer();
+                        if (container.has(key, PersistentDataType.STRING)) {
+                            String code = container.get(key, PersistentDataType.STRING);
+                            if (code.equals(realCode)) {
+                                e.setCustomName(null);
+                                e.setCustomNameVisible(false);
+                                container.remove(key);
+                                if (e instanceof org.bukkit.entity.Tameable t) {
+                                    if (t.isTamed()) {
+                                        t.setTamed(false);
+                                        t.setOwner(null);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             // "Release" the vehicle by setting owner to a null-like UUID
              vehicleDAO.updateGarageVehicle(new GarageVehicle(
                 vehicle.getId(),
-                UUID.fromString("00000000-0000-0000-0000-000000000000"), // Null UUID
+                NULL_UUID, // Null UUID
                 "Unowned",
-                vehicle.getIdentityCode(),
+                realCode,
                 vehicle.getModel(),
                 vehicle.getModelId(),
+                vehicle.getModelIndex(),
                 vehicle.getStatsOriginal(),
                 vehicle.getStatsExtended(),
                 false,
@@ -868,8 +1078,11 @@ public class VehicleManager {
                 false
             ));
             
+            // Invalidate and remove all keys bound to this identity code from online players
+            invalidateAllKeysForIdentity(realCode);
+
             player.sendMessage(languageManager.get("prefix") + languageManager.get("unbind-success"));
-            logDAO.logOwnershipOp(player.getUniqueId(), player.getName(), identityCode, vehicle.getModel(), "UNBIND", "Unbound vehicle", true, null);
+            logDAO.logOwnershipOp(player.getUniqueId(), player.getName(), realCode, vehicle.getModel(), "UNBIND", "Unbound vehicle", true, null);
 
         } catch (SQLException e) {
              e.printStackTrace();
@@ -897,7 +1110,7 @@ public class VehicleManager {
             GarageVehicle vehicle = vehicleDAO.getGarageVehicle(identityCode);
             if (vehicle != null) {
                 String serializedData = serializeEntityData(entity);
-                vehicle.setStatsExtended(serializedData);
+                vehicle.setStatsExtended(encodeStatsJson(serializedData));
                 vehicle.setInGarage(true);
                 vehicleDAO.updateGarageVehicle(vehicle);
             }
@@ -911,6 +1124,57 @@ public class VehicleManager {
     
     // Helper to find vehicle by ID or Model Name (First match)
     private GarageVehicle findVehicle(Player player, String arg) throws SQLException {
+        if (arg != null && arg.contains("#")) {
+            String[] parts = arg.split("#", 2);
+            if (parts.length == 2) {
+                String model = parts[0];
+                int index = 1;
+                try { index = Integer.parseInt(parts[1]); } catch (NumberFormatException ignored) {}
+                List<GarageVehicle> owned = vehicleDAO.getPlayerVehicles(player.getUniqueId());
+                for (GarageVehicle v : owned) {
+                    if (v.getModel().equalsIgnoreCase(model) && v.getModelIndex() == index) {
+                        return v;
+                    }
+                }
+            }
+        }
+        if (arg != null && arg.contains("[") && arg.endsWith("]")) {
+            int i = arg.indexOf("[");
+            String model = arg.substring(0, i);
+            String cname = arg.substring(i + 1, arg.length() - 1);
+            List<GarageVehicle> owned = vehicleDAO.getPlayerVehicles(player.getUniqueId());
+            for (GarageVehicle v : owned) {
+                if (v.getModel().equalsIgnoreCase(model)) {
+                    String stats = v.getStatsExtended();
+                    if (stats != null && !stats.isEmpty()) {
+                        try {
+                            String json = decodeStatsString(stats);
+                            com.google.gson.JsonObject jo = com.google.gson.JsonParser.parseString(json).getAsJsonObject();
+                            if (jo.has("customName") && cname.equalsIgnoreCase(jo.get("customName").getAsString())) {
+                                return v;
+                            }
+                        } catch (Exception ignored) {}
+                    }
+                }
+            }
+        }
+        if (arg != null && arg.contains(":")) {
+            String[] parts = arg.split(":", 2);
+            String m = parts[0];
+            String mid = parts.length > 1 ? parts[1] : "";
+            List<GarageVehicle> owned = vehicleDAO.getPlayerVehicles(player.getUniqueId());
+            for (GarageVehicle v : owned) {
+                if (v.getModel().equalsIgnoreCase(m) && v.getModelId().equalsIgnoreCase(mid)) {
+                    return v;
+                }
+            }
+            // Fallback: try identityCode equals the right part
+            for (GarageVehicle v : owned) {
+                if (v.getIdentityCode().equalsIgnoreCase(mid)) {
+                    return v;
+                }
+            }
+        }
         GarageVehicle vehicle = vehicleDAO.getGarageVehicle(arg);
         if (vehicle != null && vehicle.getOwnerUuid().equals(player.getUniqueId())) {
             return vehicle;
@@ -1153,6 +1417,27 @@ public class VehicleManager {
                 }
                 json.add("potionEffects", effectsJson);
             }
+            
+            // Capture all attribute base values
+            com.google.gson.JsonObject attrs = new com.google.gson.JsonObject();
+            for (org.bukkit.attribute.Attribute attrEnum : org.bukkit.attribute.Attribute.values()) {
+                org.bukkit.attribute.AttributeInstance inst = living.getAttribute(attrEnum);
+                if (inst != null && attrEnum.getKey() != null) {
+                    attrs.addProperty(attrEnum.getKey().toString(), inst.getBaseValue());
+                }
+            }
+            if (attrs.size() > 0) {
+                json.add("attributes", attrs);
+            }
+            
+            // Equipment (armor/saddle and generic equipment)
+            org.bukkit.inventory.EntityEquipment eq = living.getEquipment();
+            if (eq != null) {
+                ItemStack main = eq.getItemInMainHand();
+                ItemStack off = eq.getItemInOffHand();
+                if (main != null && !main.getType().isAir()) json.addProperty("equipMain", itemStackToBase64(main));
+                if (off != null && !off.getType().isAir()) json.addProperty("equipOff", itemStackToBase64(off));
+            }
         }
 
         // Tameable
@@ -1178,6 +1463,24 @@ public class VehicleManager {
             if (type != null) {
                 AttributeInstance jump = abstractHorse.getAttribute(type);
                 if (jump != null) json.addProperty("jumpStrength", jump.getBaseValue());
+            }
+            
+            // Inventory contents (包括箱子内物品)
+            org.bukkit.inventory.Inventory inv = abstractHorse.getInventory();
+            if (inv != null && inv.getSize() > 0) {
+                com.google.gson.JsonArray items = new com.google.gson.JsonArray();
+                for (int i = 0; i < inv.getSize(); i++) {
+                    ItemStack it = inv.getItem(i);
+                    if (it != null && !it.getType().isAir()) {
+                        JsonObject slot = new JsonObject();
+                        slot.addProperty("slot", i);
+                        slot.addProperty("item", itemStackToBase64(it));
+                        items.add(slot);
+                    }
+                }
+                if (items.size() > 0) {
+                    json.add("inventory", items);
+                }
             }
         }
         
@@ -1266,6 +1569,22 @@ public class VehicleManager {
                         }
                     }
                 }
+                
+                // Restore all attribute base values
+                if (json.has("attributes")) {
+                    JsonObject attrs = json.getAsJsonObject("attributes");
+                    for (java.util.Map.Entry<String, com.google.gson.JsonElement> entry : attrs.entrySet()) {
+                        String keyStr = entry.getKey();
+                        double baseVal = entry.getValue().getAsDouble();
+                        org.bukkit.attribute.Attribute attrType = Registry.ATTRIBUTE.get(NamespacedKey.fromString(keyStr));
+                        if (attrType != null) {
+                            AttributeInstance inst = living.getAttribute(attrType);
+                            if (inst != null) {
+                                inst.setBaseValue(baseVal);
+                            }
+                        }
+                    }
+                }
             }
             
             // Custom Name
@@ -1327,18 +1646,79 @@ public class VehicleManager {
                 }
             }
             
+            // Restore inventory contents (包括箱子内物品)
+            if (entity instanceof AbstractHorse && json.has("inventory")) {
+                AbstractHorse ah = (AbstractHorse) entity;
+                org.bukkit.inventory.Inventory inv = ah.getInventory();
+                com.google.gson.JsonArray items = json.getAsJsonArray("inventory");
+                for (com.google.gson.JsonElement el : items) {
+                    JsonObject slot = el.getAsJsonObject();
+                    int idx = slot.get("slot").getAsInt();
+                    ItemStack it = itemStackFromBase64(slot.get("item").getAsString());
+                    if (idx >= 0 && idx < inv.getSize()) {
+                        inv.setItem(idx, it);
+                    }
+                }
+            }
+            
+            // Equipment restore
+            if (entity instanceof LivingEntity) {
+                LivingEntity living = (LivingEntity) entity;
+                org.bukkit.inventory.EntityEquipment eq = living.getEquipment();
+                if (eq != null) {
+                    if (json.has("equipMain")) eq.setItemInMainHand(itemStackFromBase64(json.get("equipMain").getAsString()));
+                    if (json.has("equipOff")) eq.setItemInOffHand(itemStackFromBase64(json.get("equipOff").getAsString()));
+                }
+            }
+            
         } catch (Exception e) {
             e.printStackTrace();
         }
     }
+    
+    public void snapshotEntityAsync(Entity entity) {
+        NamespacedKey key = new NamespacedKey(plugin, "vehicle_identity_code");
+        PersistentDataContainer pdc = entity.getPersistentDataContainer();
+        if (!pdc.has(key, PersistentDataType.STRING)) return;
+        String identityCode = pdc.get(key, PersistentDataType.STRING);
+        long now = System.currentTimeMillis();
+        Long last = lastSnapshots.get(identityCode);
+        if (last != null && (now - last) < 500) {
+            return; // debounce
+        }
+        lastSnapshots.put(identityCode, now);
+        
+        runOnEntity(entity, () -> {
+            String json = serializeEntityData(entity);
+            String encoded = encodeStatsJson(json);
+            runAsync(() -> {
+                try {
+                    GarageVehicle v = vehicleDAO.getGarageVehicle(identityCode);
+                    if (v != null) {
+                        v.setStatsExtended(encoded);
+                        vehicleDAO.updateGarageVehicle(v);
+                    }
+                } catch (SQLException e) {
+                    e.printStackTrace();
+                }
+            });
+        });
+    }
 
     private String itemStackToBase64(ItemStack item) throws IllegalStateException {
         try {
-            ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
-            BukkitObjectOutputStream dataOutput = new BukkitObjectOutputStream(outputStream);
+            ByteArrayOutputStream rawOut = new ByteArrayOutputStream();
+            BukkitObjectOutputStream dataOutput = new BukkitObjectOutputStream(rawOut);
             dataOutput.writeObject(item);
             dataOutput.close();
-            return Base64.getEncoder().encodeToString(outputStream.toByteArray());
+            byte[] raw = rawOut.toByteArray();
+
+            ByteArrayOutputStream compressedOut = new ByteArrayOutputStream();
+            try (java.util.zip.GZIPOutputStream gzip = new java.util.zip.GZIPOutputStream(compressedOut)) {
+                gzip.write(raw);
+            }
+            byte[] compressed = compressedOut.toByteArray();
+            return Base64.getEncoder().encodeToString(compressed);
         } catch (Exception e) {
             throw new IllegalStateException("Unable to save item stack.", e);
         }
@@ -1346,8 +1726,18 @@ public class VehicleManager {
 
     private ItemStack itemStackFromBase64(String data) throws IOException {
         try {
-            ByteArrayInputStream inputStream = new ByteArrayInputStream(Base64.getDecoder().decode(data));
-            BukkitObjectInputStream dataInput = new BukkitObjectInputStream(inputStream);
+            byte[] decoded = Base64.getDecoder().decode(data);
+            java.io.InputStream base = new ByteArrayInputStream(decoded);
+
+            // Support both legacy (raw) and new (GZIP) encodings
+            java.io.InputStream in;
+            if (decoded.length >= 2 && (decoded[0] == (byte) 0x1f && decoded[1] == (byte) 0x8b)) {
+                in = new java.util.zip.GZIPInputStream(base);
+            } else {
+                in = base;
+            }
+
+            BukkitObjectInputStream dataInput = new BukkitObjectInputStream(in);
             ItemStack item = (ItemStack) dataInput.readObject();
             dataInput.close();
             return item;

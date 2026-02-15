@@ -18,6 +18,8 @@ import org.bukkit.plugin.java.JavaPlugin;
 import java.util.List;
 
 import org.bukkit.event.entity.EntityDeathEvent;
+import org.bukkit.event.entity.EntityPotionEffectEvent;
+import org.bukkit.event.entity.EntityTameEvent;
 import org.bukkit.event.world.ChunkLoadEvent;
 import org.bukkit.event.world.ChunkUnloadEvent;
 import org.bukkit.entity.Entity;
@@ -29,6 +31,10 @@ import org.bukkit.event.vehicle.VehicleExitEvent;
 import org.bukkit.event.vehicle.VehicleMoveEvent;
 import org.bukkit.util.Vector;
 import org.bukkit.event.player.PlayerMoveEvent;
+import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.event.inventory.InventoryCloseEvent;
+import org.bukkit.inventory.InventoryHolder;
+import org.bukkit.entity.AbstractHorse;
 
 import com.github.cinnaio.transportation.config.LanguageManager;
 
@@ -70,6 +76,10 @@ public class VehicleListener implements Listener {
         if (vehicleManager.isFrozen(vehicle.getUniqueId())) {
             vehicle.setVelocity(new Vector(0, 0, 0));
         }
+        if (vehicle.getPersistentDataContainer().has(keyId, PersistentDataType.STRING)) {
+            String code = vehicle.getPersistentDataContainer().get(keyId, PersistentDataType.STRING);
+            vehicleManager.updateVehicleLocation(code, vehicle.getLocation());
+        }
     }
     
     @EventHandler
@@ -82,6 +92,7 @@ public class VehicleListener implements Listener {
         if (!vehicle.getPersistentDataContainer().has(keyId, PersistentDataType.STRING)) return;
         
         String identityCode = vehicle.getPersistentDataContainer().get(keyId, PersistentDataType.STRING);
+        vehicleManager.updateVehicleLocation(identityCode, vehicle.getLocation());
         
         // Check permissions
         boolean hasPermission = vehicleManager.canDrive(player, identityCode);
@@ -128,6 +139,7 @@ public class VehicleListener implements Listener {
                 String code = entity.getPersistentDataContainer().get(keyId, PersistentDataType.STRING);
                 vehicleManager.registerActiveEntity(code, entity.getUniqueId());
                 vehicleManager.updateVehicleLocation(code, null);
+                vehicleManager.snapshotEntityAsync(entity);
             }
         }
     }
@@ -153,6 +165,44 @@ public class VehicleListener implements Listener {
             String code = entity.getPersistentDataContainer().get(keyId, PersistentDataType.STRING);
             vehicleManager.handleVehicleDestruction(code, entity.getLocation(), "Death");
             vehicleManager.unregisterActiveEntity(code);
+        }
+    }
+
+    @EventHandler
+    public void onEntityPotionEffect(EntityPotionEffectEvent event) {
+        Entity entity = event.getEntity();
+        if (entity.getPersistentDataContainer().has(keyId, PersistentDataType.STRING)) {
+            vehicleManager.snapshotEntityAsync(entity);
+        }
+    }
+
+    @EventHandler
+    public void onEntityTame(EntityTameEvent event) {
+        Entity entity = event.getEntity();
+        if (entity.getPersistentDataContainer().has(keyId, PersistentDataType.STRING)) {
+            vehicleManager.snapshotEntityAsync(entity);
+        }
+    }
+
+    @EventHandler
+    public void onInventoryClick(InventoryClickEvent event) {
+        InventoryHolder holder = event.getInventory().getHolder();
+        if (holder instanceof AbstractHorse) {
+            AbstractHorse horse = (AbstractHorse) holder;
+            if (horse.getPersistentDataContainer().has(keyId, PersistentDataType.STRING)) {
+                vehicleManager.snapshotEntityAsync(horse);
+            }
+        }
+    }
+
+    @EventHandler
+    public void onInventoryClose(InventoryCloseEvent event) {
+        InventoryHolder holder = event.getInventory().getHolder();
+        if (holder instanceof AbstractHorse) {
+            AbstractHorse horse = (AbstractHorse) holder;
+            if (horse.getPersistentDataContainer().has(keyId, PersistentDataType.STRING)) {
+                vehicleManager.snapshotEntityAsync(horse);
+            }
         }
     }
 

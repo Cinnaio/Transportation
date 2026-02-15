@@ -61,6 +61,7 @@ public class DatabaseManager {
                     "vehicle_identity_code VARCHAR(64) UNIQUE NOT NULL," +
                     "vehicle_model VARCHAR(64) NOT NULL," +
                     "vehicle_model_id VARCHAR(64) NOT NULL," +
+                    "model_index INTEGER DEFAULT 1," +
                     "stats_original TEXT," + // JSON or serialized string for original stats
                     "stats_extended TEXT," + // JSON or serialized string for extended stats
                     "is_in_garage BOOLEAN DEFAULT 1," +
@@ -155,6 +156,7 @@ public class DatabaseManager {
             try { stmt.execute("ALTER TABLE log_usage_ops ADD COLUMN player_name VARCHAR(16)"); } catch (SQLException ignored) {}
             try { stmt.execute("ALTER TABLE log_usage_ops ADD COLUMN operation_type VARCHAR(16)"); } catch (SQLException ignored) {}
             try { stmt.execute("ALTER TABLE log_identity_changes ADD COLUMN player_name VARCHAR(16)"); } catch (SQLException ignored) {}
+            try { stmt.execute("ALTER TABLE garage_vehicles ADD COLUMN model_index INTEGER DEFAULT 1"); } catch (SQLException ignored) {}
 
         } catch (SQLException e) {
             plugin.getLogger().severe("Failed to initialize database tables: " + e.getMessage());
