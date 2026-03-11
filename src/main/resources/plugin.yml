@@ -6,7 +6,9 @@ load: STARTUP
 folia-supported: true
 authors: [ Cinnaio ]
 depend: [Vault]
-
+libraries:
+  - org.xerial:sqlite-jdbc:3.46.1.0
+  - com.zaxxer:HikariCP:5.1.0
 commands:
   transportation:
     description: Main command for Transportation plugin

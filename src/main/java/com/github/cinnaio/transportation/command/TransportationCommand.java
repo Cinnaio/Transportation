@@ -60,34 +60,37 @@ public class TransportationCommand implements TabExecutor {
                 break;
 
             case "bind":
+                if (args.length > 1) {
+                    player.sendMessage(languageManager.get("prefix") + languageManager.get("bind-usage-no-args"));
+                    return true;
+                }
+                
                 // Raytrace to find entity
                 RayTraceResult result = player.getWorld().rayTraceEntities(player.getEyeLocation(), player.getEyeLocation().getDirection(), configManager.getRaytraceDistance(), entity -> !entity.getUniqueId().equals(player.getUniqueId()));
                 if (result != null && result.getHitEntity() != null) {
                     Entity entity = result.getHitEntity();
                     
-                    String modelName;
+                    String modelName = entity.getCustomName() != null ? entity.getCustomName() : entity.getType().name();
                     String modelId = "vanilla";
-
-                    if (args.length >= 2) {
-                        String input = args[1];
-                        if (input.contains(":")) {
-                            String[] parts = input.split(":", 2);
-                            modelName = parts[0];
-                            if (parts.length > 1 && !parts[1].isEmpty()) {
-                                modelId = parts[1];
-                            }
-                        } else {
-                            modelName = input;
-                        }
-                    } else {
-                        // Use entity type or name as model
-                        modelName = entity.getCustomName() != null ? entity.getCustomName() : entity.getType().name();
-                    }
 
                     vehicleManager.createBoundVehicle(player, modelName, modelId, entity);
                 } else {
                     player.sendMessage(languageManager.get("prefix") + languageManager.get("no-entity-sight"));
                 }
+                break;
+
+            case "rename":
+                if (args.length < 3) {
+                    player.sendMessage(languageManager.get("prefix") + languageManager.get("rename-usage"));
+                    return true;
+                }
+                String targetVehicle = args[1];
+                StringBuilder nameBuilder = new StringBuilder();
+                for (int i = 2; i < args.length; i++) {
+                    nameBuilder.append(args[i]).append(" ");
+                }
+                String newName = nameBuilder.toString().trim();
+                vehicleManager.renameVehicle(player, targetVehicle, newName);
                 break;
 
             case "unbind":
@@ -284,10 +287,12 @@ public class TransportationCommand implements TabExecutor {
             " &7  └ 回收当前载具",
             " &c/tra freeze &f<model&f>",
             " &7  └ 冻结 / 解冻载具",
-            " &c/tra bind &f[model:id]",
+            " &c/tra bind",
             " &7  └ 绑定准心指向的载具 (默认 vanilla)",
             " &c/tra unbind &f<model&f>",
             " &7  └ 解绑或丢弃载具",
+            " &c/tra rename &f<model> <name>",
+            " &7  └ 修改载具名称 (支持颜色)",
             " &c/tra transfer &f<model&f> &f<player&f>",
             " &7  └ 转让载具给其他玩家",
             " &c/tra rekey &f<model&f>",
@@ -312,7 +317,7 @@ public class TransportationCommand implements TabExecutor {
     @Override
     public @Nullable List<String> onTabComplete(@NotNull CommandSender sender, @NotNull Command command, @NotNull String alias, @NotNull String[] args) {
         if (args.length == 1) {
-            List<String> subCommands = Arrays.asList("buy", "bind", "unbind", "transfer", "out", "in", "freeze", "unfreeze", "rekey", "help", "list", "reload", "keybind", "unkeybind", "fix");
+            List<String> subCommands = Arrays.asList("buy", "bind", "unbind", "transfer", "out", "in", "freeze", "unfreeze", "rekey", "help", "list", "reload", "keybind", "unkeybind", "fix", "rename");
             return filter(subCommands, args[0]);
         }
         
@@ -322,17 +327,7 @@ public class TransportationCommand implements TabExecutor {
                 // Return list of server vehicles
                 return Arrays.asList("Car", "Bike"); // Mock list
             }
-            if (sub.equals("bind")) {
-                // Return vehicle models
-                List<String> models = new ArrayList<>();
-                for (org.bukkit.entity.EntityType type : org.bukkit.entity.EntityType.values()) {
-                    if (type.isAlive() && type.isSpawnable()) {
-                        models.add(type.name().toLowerCase());
-                    }
-                }
-                return filter(models, args[1]);
-            }
-            if (Arrays.asList("unbind", "transfer", "out", "in", "freeze", "unfreeze", "rekey", "keybind", "fix").contains(sub)) {
+            if (Arrays.asList("unbind", "transfer", "out", "in", "freeze", "unfreeze", "rekey", "keybind", "fix", "rename").contains(sub)) {
                 java.util.Set<String> options = new java.util.LinkedHashSet<>();
                 List<com.github.cinnaio.transportation.model.GarageVehicle> vehicles = vehicleManager.getPlayerVehicles(((Player)sender).getUniqueId());
                 for (com.github.cinnaio.transportation.model.GarageVehicle v : vehicles) {

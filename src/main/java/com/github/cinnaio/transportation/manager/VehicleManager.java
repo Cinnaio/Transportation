@@ -300,6 +300,7 @@ public class VehicleManager {
                     serverVehicle.getName(),
                     serverVehicle.getModel(),
                     nextIndex,
+                    serverVehicle.getName(), // Default vehicleName
                     serverVehicle.getStatsOriginal(),
                     serverVehicle.getStatsExtended(),
                     true, // In garage by default
@@ -712,6 +713,94 @@ public class VehicleManager {
         }
     }
 
+    public void renameVehicle(Player player, String identityCode, String newName) {
+        try {
+            GarageVehicle vehicle = findVehicle(player, identityCode);
+            if (vehicle == null) {
+                player.sendMessage(languageManager.get("prefix") + languageManager.get("vehicle-not-found"));
+                return;
+            }
+            
+            if (!vehicle.getOwnerUuid().equals(player.getUniqueId()) && !player.hasPermission("transportation.admin")) {
+                player.sendMessage(languageManager.get("prefix") + languageManager.get("not-owner"));
+                return;
+            }
+            
+            // Color processing
+            String finalName = newName;
+            boolean hasHex = java.util.regex.Pattern.compile("#[A-Fa-f0-9]{6}").matcher(newName).find();
+            
+            if (hasHex) {
+                if (!player.hasPermission("transportation.color.hex")) {
+                    player.sendMessage(languageManager.get("prefix") + languageManager.get("no-permission-hex"));
+                    return;
+                }
+                finalName = colorize(newName);
+            } else {
+                finalName = org.bukkit.ChatColor.translateAlternateColorCodes('&', newName);
+            }
+            
+            vehicle.setVehicleName(finalName);
+            
+            // Update active entity if exists
+            Entity entity = forceGetEntity(vehicle.getIdentityCode());
+            if (entity != null) {
+                entity.setCustomName(finalName);
+                entity.setCustomNameVisible(true);
+                
+                // Update statsExtended
+                String jsonStr = serializeEntityData(entity);
+                vehicle.setStatsExtended(encodeStatsJson(jsonStr));
+            } else {
+                // Update statsExtended manually if not active
+                if (vehicle.getStatsExtended() != null && !vehicle.getStatsExtended().isEmpty()) {
+                    try {
+                        String jsonStr = decodeStatsString(vehicle.getStatsExtended());
+                        JsonObject json = JsonParser.parseString(jsonStr).getAsJsonObject();
+                        json.addProperty("customName", finalName);
+                        json.addProperty("customNameVisible", true);
+                        vehicle.setStatsExtended(encodeStatsJson(json.toString()));
+                    } catch (Exception ignored) {}
+                }
+            }
+            
+            vehicleDAO.updateGarageVehicle(vehicle);
+            player.sendMessage(languageManager.get("prefix") + languageManager.get("rename-success").replace("%name%", finalName));
+            
+        } catch (SQLException e) {
+            e.printStackTrace();
+            player.sendMessage(languageManager.get("prefix") + languageManager.get("database-error"));
+        }
+    }
+    
+    private String colorize(String text) {
+        java.util.regex.Pattern hexPattern = java.util.regex.Pattern.compile("&#([A-Fa-f0-9]{6})");
+        java.util.regex.Matcher matcher = hexPattern.matcher(text);
+        StringBuffer buffer = new StringBuffer();
+        while (matcher.find()) {
+            try {
+                // Use reflection or BungeeCord API if available. Assuming Spigot/Paper environment.
+                String hex = "#" + matcher.group(1);
+                net.md_5.bungee.api.ChatColor color = net.md_5.bungee.api.ChatColor.of(hex);
+                matcher.appendReplacement(buffer, color.toString());
+            } catch (Exception e) {
+                // Fallback if version too old
+                matcher.appendReplacement(buffer, "");
+            }
+        }
+        matcher.appendTail(buffer);
+        String result = buffer.toString();
+        
+        // Also support standard #RRGGBB format? User didn't specify format, but &#RRGGBB is common for legacy-like hex.
+        // Or just #RRGGBB.
+        // Let's also support #RRGGBB for simplicity if it's not preceded by &?
+        // But standard MC color codes use &.
+        // Let's stick to &#RRGGBB for now, or just BungeeCord's native support?
+        // Actually, let's just use a simple approach: convert &#RRGGBB to BungeeColor.
+        
+        return org.bukkit.ChatColor.translateAlternateColorCodes('&', result);
+    }
+
     public void rekeyVehicle(Player player, String inputId) {
         GarageVehicle vehicle = null;
         try {
@@ -994,6 +1083,7 @@ public class VehicleManager {
                     modelName,
                     modelId,
                     vehicleDAO.getNextModelIndex(player.getUniqueId(), modelName),
+                    modelName,
                     "{}",
                     encodedSnapshot,
                     false, // It's in the world (we are looking at it)
@@ -1071,6 +1161,7 @@ public class VehicleManager {
                 vehicle.getModel(),
                 vehicle.getModelId(),
                 vehicle.getModelIndex(),
+                vehicle.getVehicleName(),
                 vehicle.getStatsOriginal(),
                 vehicle.getStatsExtended(),
                 false,

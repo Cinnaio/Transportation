@@ -21,7 +21,7 @@ public class VehicleDAO {
 
     // Garage Vehicle Operations
     public void addGarageVehicle(GarageVehicle vehicle) throws SQLException {
-        String sql = "INSERT INTO garage_vehicles (owner_id, owner_name, vehicle_identity_code, vehicle_model, vehicle_model_id, model_index, stats_original, stats_extended, is_in_garage, is_frozen, is_destroyed) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+        String sql = "INSERT INTO garage_vehicles (owner_id, owner_name, vehicle_identity_code, vehicle_model, vehicle_model_id, model_index, vehicle_name, stats_original, stats_extended, is_in_garage, is_frozen, is_destroyed) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
         try (Connection conn = dbManager.getConnection(); PreparedStatement pstmt = conn.prepareStatement(sql)) {
             pstmt.setString(1, vehicle.getOwnerUuid().toString());
             pstmt.setString(2, vehicle.getOwnerName());
@@ -29,11 +29,12 @@ public class VehicleDAO {
             pstmt.setString(4, vehicle.getModel());
             pstmt.setString(5, vehicle.getModelId());
             pstmt.setInt(6, vehicle.getModelIndex());
-            pstmt.setString(7, vehicle.getStatsOriginal());
-            pstmt.setString(8, vehicle.getStatsExtended());
-            pstmt.setBoolean(9, vehicle.isInGarage());
-            pstmt.setBoolean(10, vehicle.isFrozen());
-            pstmt.setBoolean(11, vehicle.isDestroyed());
+            pstmt.setString(7, vehicle.getVehicleName());
+            pstmt.setString(8, vehicle.getStatsOriginal());
+            pstmt.setString(9, vehicle.getStatsExtended());
+            pstmt.setBoolean(10, vehicle.isInGarage());
+            pstmt.setBoolean(11, vehicle.isFrozen());
+            pstmt.setBoolean(12, vehicle.isDestroyed());
             pstmt.executeUpdate();
         }
     }
@@ -66,19 +67,20 @@ public class VehicleDAO {
     }
 
     public void updateGarageVehicle(GarageVehicle vehicle) throws SQLException {
-        String sql = "UPDATE garage_vehicles SET owner_id = ?, owner_name = ?, vehicle_model = ?, vehicle_model_id = ?, model_index = ?, stats_original = ?, stats_extended = ?, is_in_garage = ?, is_frozen = ?, is_destroyed = ? WHERE vehicle_identity_code = ?";
+        String sql = "UPDATE garage_vehicles SET owner_id = ?, owner_name = ?, vehicle_model = ?, vehicle_model_id = ?, model_index = ?, vehicle_name = ?, stats_original = ?, stats_extended = ?, is_in_garage = ?, is_frozen = ?, is_destroyed = ? WHERE vehicle_identity_code = ?";
         try (Connection conn = dbManager.getConnection(); PreparedStatement pstmt = conn.prepareStatement(sql)) {
             pstmt.setString(1, vehicle.getOwnerUuid().toString());
             pstmt.setString(2, vehicle.getOwnerName());
             pstmt.setString(3, vehicle.getModel());
             pstmt.setString(4, vehicle.getModelId());
             pstmt.setInt(5, vehicle.getModelIndex());
-            pstmt.setString(6, vehicle.getStatsOriginal());
-            pstmt.setString(7, vehicle.getStatsExtended());
-            pstmt.setBoolean(8, vehicle.isInGarage());
-            pstmt.setBoolean(9, vehicle.isFrozen());
-            pstmt.setBoolean(10, vehicle.isDestroyed());
-            pstmt.setString(11, vehicle.getIdentityCode());
+            pstmt.setString(6, vehicle.getVehicleName());
+            pstmt.setString(7, vehicle.getStatsOriginal());
+            pstmt.setString(8, vehicle.getStatsExtended());
+            pstmt.setBoolean(9, vehicle.isInGarage());
+            pstmt.setBoolean(10, vehicle.isFrozen());
+            pstmt.setBoolean(11, vehicle.isDestroyed());
+            pstmt.setString(12, vehicle.getIdentityCode());
             pstmt.executeUpdate();
         }
     }
@@ -93,6 +95,9 @@ public class VehicleDAO {
     }
 
     private GarageVehicle mapResultSetToGarageVehicle(ResultSet rs) throws SQLException {
+        String vName = null;
+        try { vName = rs.getString("vehicle_name"); } catch (SQLException ignored) {}
+        
         return new GarageVehicle(
                 rs.getInt("id"),
                 UUID.fromString(rs.getString("owner_id")),
@@ -101,6 +106,7 @@ public class VehicleDAO {
                 rs.getString("vehicle_model"),
                 rs.getString("vehicle_model_id"),
                 rs.getInt("model_index"),
+                vName,
                 rs.getString("stats_original"),
                 rs.getString("stats_extended"),
                 rs.getBoolean("is_in_garage"),
