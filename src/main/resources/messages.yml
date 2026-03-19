@@ -1,4 +1,4 @@
-prefix: "<color:gray>[<color:gold>Transportation<color:gray>] <color:#A0A0A0>"
+prefix: ""
 no-permission: "<color:#FF6B6B>你无权进行此操作。"
 no-permission-hex: "<color:#FF6B6B>你无权使用Hex颜色代码，仅能使用legacy颜色代码。"
 player-only: "<color:#FF6B6B>此功能仅限亲自操作。"
