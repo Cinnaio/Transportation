@@ -101,6 +101,7 @@ public class LanguageManager {
         messages.addDefault("transfer-success", "<color:#6BFF95>载具已转让给 <color:#FFD479>%player%<color:#6BFF95>。");
         messages.addDefault("receive-vehicle", "<color:#6BFF95>你收到了 <color:#FFD479>%player% <color:#6BFF95>转让的载具。");
         messages.addDefault("bind-success", "<color:#6BFF95>载具绑定成功。");
+        messages.addDefault("bind-usage-no-args", "<color:#FF6B6B>该指令无需参数。用法: /tra bind");
         messages.addDefault("unbind-success", "<color:#6BFF95>载具解绑成功。");
         messages.addDefault("freeze-success", "<color:#6BFF95>载具状态已更新：冻结=<color:#FFD479>%status%<color:#6BFF95>。");
         messages.addDefault("key-bound", "<color:#6BFF95>钥匙绑定成功。");
